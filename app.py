@@ -6,41 +6,18 @@ import numpy as np
 
 TEAM = "SMHS"  # Our team
 
+# In this version, we simply use the raw value from 'yard_ln'
 def transform_yard_line_row(row):
-    """
-    Transforms the raw yard line (yard_ln) to a scale from -50 to 50 with 0 as a touchdown,
-    depending on whether SMHS is playing at home or away.
-    
-    For home games (offense == home):
-      - Opponent's side (yard_ln >= 50): transformed_yard = 100 - yard_ln.
-      - Our side (yard_ln < 50): transformed_yard = -yard_ln.
-      
-    For away games (offense != home):
-      - Opponent's side (yard_ln <= 50): transformed_yard = yard_ln.
-      - Our side (yard_ln > 50): transformed_yard = 50 - yard_ln.
-    """
-    yard_ln = row['yard_ln']
-    is_home = (str(row['off']).strip().upper() == TEAM.upper() and 
-               str(row['home']).strip().upper() == TEAM.upper())
-    if is_home:
-        if yard_ln >= 50:
-            return 100 - yard_ln
-        else:
-            return -yard_ln
-    else:
-        # Away game: field is reversed.
-        if yard_ln <= 50:
-            return yard_ln
-        else:
-            return 50 - yard_ln
+    return row['yard_ln']
 
 def compute_sample_weight(row):
     """
     Computes a sample weight for a historical play based on its success.
     - Base weight is 1.
     - If the play resulted in a touchdown (td == 1), add 1.
-    - If the play gained positive yards, add gain/loss/10.
-    - Adjust weight based on efficiency: if eff == 'Y' (good), multiply by 1.2; if eff == 'N', multiply by 0.8.
+    - If the play gained positive yards, add (gain/loss) divided by 10.
+    - Adjust weight based on efficiency: if eff == 'Y' (good), multiply by 1.2;
+      if eff == 'N', multiply by 0.8.
     """
     weight = 1.0
     if row.get('td', 0) == 1:
@@ -54,12 +31,11 @@ def compute_sample_weight(row):
         weight *= 0.8
     return weight
 
-# Load the SMHS dataset (cached for faster reloads)
 @st.cache_data
 def load_data():
     df = pd.read_csv('data/sm_cleaned_with_correct_fields.csv')
-    # Create a new column for the transformed yard line
-    df['transformed_yard'] = df.apply(transform_yard_line_row, axis=1)
+    # Use the raw 'yard_ln' values directly
+    df['transformed_yard'] = df['yard_ln']
     return df
 
 df = load_data()
@@ -123,7 +99,16 @@ else:
         if selected_play.empty:
             st.error("No play found for the selected play number!")
         else:
-            st.subheader("Game State for Selected Play")
+            # Retrieve the raw yard line for display
+            raw_yard = selected_play['yard_ln'].iloc[0]
+            if raw_yard < 0:
+                yard_str = f"SMHS {abs(raw_yard)} Yard Line"
+            elif raw_yard > 0:
+                yard_str = f"Opponent {raw_yard} Yard Line"
+            else:
+                yard_str = "Midfield"
+            
+            st.subheader(f"Prediction Output from the {yard_str}")
             st.write(selected_play[["dn", "dist", "qtr", "score_differential", "transformed_yard", "prev_gain"]].to_dict(orient="records")[0])
             
             # --- Filter Historical Data for Play Type Prediction ---
@@ -151,7 +136,6 @@ else:
                 pred = clf.predict(X_test)[0]
                 play_type = "RUN" if pred == 0 else "PASS"
                 
-                st.subheader("Prediction Output")
                 st.write("**Predicted Play Type:**", play_type)
                 
                 pred_prob = clf.predict_proba(X_test)[0]
