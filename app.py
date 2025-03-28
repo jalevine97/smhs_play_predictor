@@ -122,15 +122,59 @@ def build_feature_matrix(df_subset):
     return X
 
 # -------------------------------
-# Interactive Selector UI
+# Interactive Selector UI (Enhanced with BYE and proper week mapping)
 # -------------------------------
 st.sidebar.title("Play Selector")
-unique_games = df["game"].unique().tolist()
-selected_game = st.sidebar.selectbox("Select Game", unique_games)
-game_data = df[df["game"] == selected_game]
 
-play_numbers = game_data["play_#"].dropna().unique().astype(int)
-selected_play = st.sidebar.selectbox("Select Play Number", sorted(play_numbers))
+# Define the official schedule
+official_schedule = {
+    1: "Mission Viejo High School",
+    2: "Centennial High School",
+    3: "Liberty High School",
+    4: "Oaks Christian School",
+    5: "Leuzinger High School",
+    6: "BYE",
+    7: "Mater Dei High School",
+    8: "St. John Bosco High School",
+    9: "Orange Lutheran High School",
+    10: "JSerra Catholic High School",
+    11: "Servite",
+    12: "Inglewood High School",
+    13: "St. John Bosco High School"
+}
+
+# Build selector options
+selector_labels = []
+selector_games = []
+disabled_weeks = []
+
+for week_num, opponent in official_schedule.items():
+    label = f"Week {week_num}: {opponent}"
+    if opponent == "BYE":
+        selector_labels.append(label)
+        disabled_weeks.append(label)  # For streamlit future UI, not directly used now
+    else:
+        selector_labels.append(label)
+        selector_games.append((label, opponent))
+
+# Create the selectbox for games, skipping BYE week from selection
+game_label = st.sidebar.selectbox(
+    "Select Game",
+    options=[label for label in selector_labels if label not in disabled_weeks]
+)
+
+selected_game = dict(selector_games)[game_label]
+game_data = df[df["game"].str.contains(selected_game, case=False, na=False)]
+
+# Safely handle if game not found
+if game_data.empty:
+    st.warning(f"No data found for {selected_game}.")
+    st.stop()
+
+# Play Number Selector
+play_numbers = sorted(game_data["play_#"].dropna().unique().astype(int))
+selected_play = st.sidebar.selectbox("Select Play Number", play_numbers, key="play_number_selector")
+
 
 # -------------------------------
 # Prediction and Evaluation
@@ -174,6 +218,19 @@ else:
     for feat, val in top_features.items():
         st.markdown(f"- **{feat}** contributed significantly (importance score: {val:.3f})")
 
+    if "play_direction" in df.columns and play_row["play_direction"].notna().any():
+        dir_data = df[df["play_direction"].notna()].copy()
+        dir_data = dir_data[~((dir_data["game"] == selected_game) & (dir_data["play_#"] == selected_play))]
+        le_dir = LabelEncoder()
+        dir_data["dir_encoded"] = le_dir.fit_transform(dir_data["play_direction"])
+        dir_features = ["dn", "dist", "qtr", "score_differential", "transformed_yard", "prev_gain"]
+        clf_dir = RandomForestClassifier(n_estimators=100, random_state=42)
+        clf_dir.fit(dir_data[dir_features], dir_data["dir_encoded"])
+        pred_dir = clf_dir.predict(play_row[dir_features])[0]
+        st.write("**Predicted Direction:**", le_dir.inverse_transform([pred_dir])[0])
+
+# ... [imports and preprocessing remain unchanged up to Example Similar Plays section]
+
     example_plays = filtered_df[filtered_df['play_type_binary'] == pred].copy()
     target_yard = play_row["transformed_yard"].values[0]
     yard_tolerance = 10
@@ -186,24 +243,25 @@ else:
         (abs(example_plays["transformed_yard"] - target_yard) <= yard_tolerance)
     ]
 
+    # Add time left formatted as mm:ss
     example_plays["yard_line"] = example_plays["transformed_yard"]
     example_plays["reason"] = example_plays.apply(
         lambda row: f"Similar down ({row['dn']}), distance (~{row['dist']}), yard (~{row['yard_line']})", axis=1
     )
+    example_plays["time_left"] = example_plays["est_time_left_sec"].apply(
+        lambda s: f"{int(s // 60)}:{int(s % 60):02d}" if pd.notnull(s) else "N/A"
+    )
 
     example_plays = example_plays.sort_values(by="gain/loss", ascending=False).head(3)
-    st.write("**Example Similar Plays:**")
-    st.dataframe(example_plays[["game", "play_#", "dn", "dist", "yard_line", "play_type", "gain/loss", "reason"]])
 
-    if "play_direction" in df.columns and play_row["play_direction"].notna().any():
-        dir_data = df[df["play_direction"].notna()]
-        le_dir = LabelEncoder()
-        dir_data["dir_encoded"] = le_dir.fit_transform(dir_data["play_direction"])
-        dir_features = ["dn", "dist", "qtr", "score_differential", "transformed_yard", "prev_gain"]
-        clf_dir = RandomForestClassifier(n_estimators=100, random_state=42)
-        clf_dir.fit(dir_data[dir_features], dir_data["dir_encoded"])
-        pred_dir = clf_dir.predict(play_row[dir_features])[0]
-        st.write("**Predicted Direction:**", le_dir.inverse_transform([pred_dir])[0])
+    st.write("**Example Similar Plays:**")
+    st.dataframe(example_plays[[
+        "game", "play_#", "qtr", "time_left", "score_differential", "dn", "dist",
+        "yard_line", "play_direction", "play_type", "gain/loss", "reason"
+    ]])
+
+# ... [remaining prediction, direction prediction, and actual result blocks remain unchanged]
+
 
     st.subheader("Actual Result")
     st.write("**Actual Play Type:**", play_row["play_type"].values[0])
