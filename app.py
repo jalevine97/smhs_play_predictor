@@ -168,16 +168,32 @@ else:
     st.write("**Predicted Play Type:**", play_type)
     st.write(f"**Model Confidence:** {prob * 100:.1f}%")
 
-    # Display reasoning and influence
     top_features = pd.Series(model.named_estimators_["rf"].feature_importances_, index=X_train.columns)
     top_features = top_features.sort_values(ascending=False).head(5)
     st.write("**Reasoning Behind Prediction:**")
     for feat, val in top_features.items():
         st.markdown(f"- **{feat}** contributed significantly (importance score: {val:.3f})")
 
-    example_plays = filtered_df.loc[(filtered_df['play_type_binary'] == pred)].sample(n=min(3, len(filtered_df)), random_state=42)
+    example_plays = filtered_df[filtered_df['play_type_binary'] == pred].copy()
+    target_yard = play_row["transformed_yard"].values[0]
+    yard_tolerance = 10
+    same_dn = play_row["dn"].values[0]
+    same_dist = play_row["dist"].values[0]
+
+    example_plays = example_plays[
+        (example_plays["dn"] == same_dn) &
+        (abs(example_plays["dist"] - same_dist) <= 1) &
+        (abs(example_plays["transformed_yard"] - target_yard) <= yard_tolerance)
+    ]
+
+    example_plays["yard_line"] = example_plays["transformed_yard"]
+    example_plays["reason"] = example_plays.apply(
+        lambda row: f"Similar down ({row['dn']}), distance (~{row['dist']}), yard (~{row['yard_line']})", axis=1
+    )
+
+    example_plays = example_plays.sort_values(by="gain/loss", ascending=False).head(3)
     st.write("**Example Similar Plays:**")
-    st.dataframe(example_plays[["game", "play_#", "dn", "dist", "play_type", "gain/loss"]])
+    st.dataframe(example_plays[["game", "play_#", "dn", "dist", "yard_line", "play_type", "gain/loss", "reason"]])
 
     if "play_direction" in df.columns and play_row["play_direction"].notna().any():
         dir_data = df[df["play_direction"].notna()]
